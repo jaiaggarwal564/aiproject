@@ -4,86 +4,16 @@ import joblib
 import json
 import pandas as pd
 import numpy as np
-import base64
-from pathlib import Path
-from streamlit.components.v1 import html
 
-# -----------------------------
-# Config
-# -----------------------------
+st.set_page_config(page_title="Protein Solubility Predictor", layout="centered")
+
+st.title("Protein Solubility Predictor — UESolDS / XGBoost")
+st.write("Paste a protein sequence (single-letter amino acids). The model predicts Soluble vs Insoluble.")
+
+# Load model + feature cols
 MODEL_PATH = "D:/protein_solubility_project/models/xgb2_solubility.joblib"
 FEATURE_COLS_PATH = "D:/protein_solubility_project/models/feature_cols.json"
 
-st.set_page_config(page_title="Protein Solubility — Demo", layout="centered", initial_sidebar_state="collapsed")
-
-# -----------------------------
-# Styles & Background + Glass card
-# -----------------------------
-PAGE_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-
-html, body, [class*="stApp"] {
-  height: 100%;
-  background: radial-gradient(circle at 10% 10%, #0f172a 0%, #071029 25%, #02101b 100%);
-  font-family: "Inter", sans-serif;
-}
-
-/* blurred animated container */
-.background-hero {
-  position: relative;
-  width: 100%;
-  height: 380px;
-  border-radius: 16px;
-  overflow: hidden;
-  margin-bottom: 18px;
-  box-shadow: 0 8px 40px rgba(2,6,23,0.7);
-}
-
-/* translucent card */
-.card {
-  background: rgba(255,255,255,0.06);
-  backdrop-filter: blur(8px) saturate(120%);
-  border-radius: 14px;
-  padding: 18px;
-  box-shadow: 0 6px 30px rgba(2,6,23,0.5);
-  color: #e6eef8;
-}
-
-/* main title */
-.title {
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 6px;
-  color: #e6eef8;
-}
-
-/* small notes */
-.small {
-  color: #9fb3d6;
-  font-size: 12px;
-}
-
-/* input area tweaks */
-textarea[role="textbox"] {
-  font-family: monospace;
-  font-size: 13px;
-}
-
-/* footer */
-.footer {
-  color: #9fb3d6;
-  font-size: 12px;
-  margin-top: 16px;
-}
-</style>
-"""
-
-st.markdown(PAGE_CSS, unsafe_allow_html=True)
-
-# -----------------------------
-# Load model & columns
-# -----------------------------
 @st.cache_resource
 def load_model_and_cols():
     model = joblib.load(MODEL_PATH)
@@ -91,15 +21,9 @@ def load_model_and_cols():
         cols = json.load(f)
     return model, cols
 
-try:
-    model, FEATURE_COLS = load_model_and_cols()
-except Exception as e:
-    st.error(f"Model loading error: {e}")
-    st.stop()
+model, FEATURE_COLS = load_model_and_cols()
 
-# -----------------------------
-# Helpers (same as notebook)
-# -----------------------------
+# --- helper functions (same as notebook) ---
 AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
 hydropathy = {
     'A': 1.8,  'C': 2.5,  'D': -3.5, 'E': -3.5, 'F': 2.8,
@@ -132,6 +56,7 @@ def compute_physchem(seq):
 def build_feature_vector(seq):
     aa_feats = aa_composition(seq)
     phys = compute_physchem(seq)
+    # Combine in the same order as FEATURE_COLS
     row = []
     for c in FEATURE_COLS:
         if c in aa_feats:
@@ -139,133 +64,47 @@ def build_feature_vector(seq):
         elif c in phys:
             row.append(phys[c])
         else:
+            # unknown column -> zero
             row.append(0.0)
     return np.array(row).reshape(1, -1)
 
-# -----------------------------
-# Layout: sidebar navigation
-# -----------------------------
-page = st.sidebar.selectbox("Navigation", ["Home", "Project Details", "Samples / Download"], index=0)
+# --- UI ---
+st.markdown("### Input sequence")
+seq_input = st.text_area("Paste sequence here (single FASTA sequence, no spaces/newlines preferred).", height=150)
 
-# -----------------------------
-# HERO with 3D viewer (NGL) embedded
-# -----------------------------
-st.markdown('<div class="background-hero card">', unsafe_allow_html=True)
-
-# Use NGL viewer via CDN. This will fetch PDB by id from RCSB (internet required).
-# You can change pdbId to any PDB (e.g., 1EMA, 1GFL, 1CRN)
-pdbId = "1EMA"  # example; change if you like
-
-ngl_html = f"""
-<div id="viewport" style="width:100%; height:380px;"></div>
-<script src="https://unpkg.com/ngl@0.10.4/dist/ngl.js"></script>
-<script>
-const stage = new NGL.Stage("viewport");
-fetch("https://files.rcsb.org/download/{pdbId}.pdb")
-  .then(resp => resp.text())
-  .then(data => {{
-    const blob = new Blob([data], {{type: "chemical/x-pdb"}});
-    stage.loadFile(blob, {{ ext: "pdb" }}).then(o => {{
-      o.addRepresentation("cartoon", {{ color: "chainname" }});
-      o.addRepresentation("surface", {{ opacity: 0.15 }});
-      stage.autoView();
-      stage.setSpin(true);
-      stage.spin(0.6);
-    }});
-  }});
-</script>
-"""
-
-# Embed the NGL viewer (requires internet)
-html(ngl_html, height=380, scrolling=False)
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# -----------------------------
-# Page: Home (Prediction UI)
-# -----------------------------
-if page == "Home":
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="title">Protein Solubility Predictor</div>', unsafe_allow_html=True)
-    st.markdown('<div class="small">Paste a protein sequence (single-letter amino acids). Click Predict.</div>', unsafe_allow_html=True)
-    seq_input = st.text_area("Sequence", height=180, placeholder="Paste sequence here (no spaces/newlines preferred).")
-    col1, col2 = st.columns([1,1])
-    with col1:
-        if st.button("Predict"):
-            seq = seq_input.strip().replace("\n", "").replace(" ", "").upper()
-            if len(seq) < 10:
-                st.error("Please paste a valid protein sequence (at least ~10 aa).")
-            else:
-                X = build_feature_vector(seq)
-                proba = model.predict_proba(X)[0][1]
-                pred = "Soluble" if proba >= 0.5 else "Insoluble"
-                st.success(f"Prediction: {pred} — Probability (soluble): {proba:.3f}")
-                # Small feature snapshot
+col1, col2 = st.columns([1,1])
+with col1:
+    if st.button("Predict"):
+        seq = seq_input.strip().replace("\n", "").replace(" ", "")
+        if len(seq) < 10:
+            st.error("Please paste a valid protein sequence (at least ~10 aa).")
+        else:
+            X = build_feature_vector(seq)
+            proba = model.predict_proba(X)[0][1]  # probability soluble
+            pred = "Soluble" if proba >= 0.5 else "Insoluble"
+            st.subheader(f"Prediction: {pred}")
+            st.write(f"Soluble probability: **{proba:.3f}**")
+            # Show top contributions (approx) by comparing to mean feature vector
+            try:
+                # rough feature effect: show top 6 features where input differs most from training mean
+                # Load training mean from model if saved; otherwise estimate from FEATURE_COLS (fallback zeros)
+                st.markdown("#### Feature snapshot (selected):")
                 fv = pd.Series(X.flatten(), index=FEATURE_COLS)
-                top = fv.sort_values(ascending=False).head(6)
-                st.markdown("**Feature snapshot:**")
-                st.table(top.to_frame("value"))
-    with col2:
-        st.markdown("### Quick tips")
-        st.write("- Short, charged proteins tend to be soluble.")
-        st.write("- Membrane proteins and cysteine-rich proteins can be insoluble in E. coli.")
-        st.markdown("### Model info")
-        st.write("- XGBoost trained on UESolDS-derived features.")
-        st.write("- Input features: amino-acid composition + seq length + hydrophobicity + aromatic fraction.")
-    st.markdown('</div>', unsafe_allow_html=True)
+                key_feats = fv.sort_values(ascending=False).head(6)
+                st.table(key_feats.to_frame("value"))
+            except Exception:
+                pass
 
-# -----------------------------
-# Page: Project Details
-# -----------------------------
-if page == "Project Details":
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.header("Project: Protein Solubility Prediction (UESolDS)")
-    st.write("""
-    **Goal:** Predict whether a protein expressed in *E. coli* will be soluble or insoluble using sequence-derived features.
-    """)
-    st.subheader("Dataset")
-    st.write("- UESolDS (curated E. coli solubility dataset). Train: ~70k sequences; balanced val/test.")
-    st.subheader("Features")
-    st.write("- Amino acid composition (20 features).")
-    st.write("- Sequence length, hydrophobicity (Kyte-Doolittle avg), aromatic fraction (F/W/Y).")
-    st.subheader("Modeling")
-    st.write("- Baseline: Logistic Regression (AUC ~0.60).")
-    st.write("- Random Forest (AUC ~0.69).")
-    st.write("- Final: XGBoost + physchem features (AUC ~0.73).")
-    st.subheader("Key findings")
-    st.write("- Sequence length and cysteine content are top predictors.")
-    st.write("- Charged residues (E, D, R, K) correlate with solubility.")
-    st.subheader("How it works (high level)")
-    st.write("""
-    1. Sequence → compute fixed-length numeric features.
-    2. XGBoost predicts probability of being soluble (0-1).
-    3. Use prediction as guidance for experimental expression planning.
-    """)
-    st.markdown('</div>', unsafe_allow_html=True)
+with col2:
+    st.markdown("### Example sequences")
+    st.write("- Try a small soluble enzyme sequence or a long membrane protein to see differences.")
+    st.markdown("### Model info")
+    st.write("- Model: XGBoost trained on UESolDS-derived features.")
+    st.write("- Features: amino-acid composition + seq length + hydrophobicity + aromatic fraction.")
 
-# -----------------------------
-# Page: Samples / Download
-# -----------------------------
-if page == "Samples / Download":
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.header("Sample Sequences")
-    samples = {
-        "GFP (soluble)": "MSKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTLTYGVQCFSRYPDHMKQHDFFKSAMPEGYVQERTIFFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNYNSHNVYIMADKQKNGIKVNFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRDHMVLLEFVTAAGITLGMDELYK",
-        "Thioredoxin (soluble)": "MKKIYFTKGQGPPAVPTTTGRSVPTIEVADKIVVGKPTLLLFKNGEVAATKVGALSKGQLKEFLDANLA",
-        "Bacteriorhodopsin (insoluble)": "MNGTEGPNFYVPFSNKTGVVRSPFEYPQYYLAEPWQFSMLAAYMFLLIVLGFPINFLTLYVTVQHKKLRTPLNYILLNLAVADLFMVFGGFTTTLYTSLHGYFVFGPTGCNLEGFFATLGGEIALWSLVVLAFAVYMGVFSLAETNRFGAAHLP",
-        "IL-2 (aggregation-prone)": "MYRMQLLSCIALSLALVTNSVTKTEANLAALEAKDSPQTHSLLEDAQQISLDKNQLEHLLLDLQMILNGINNYKNPKLTRMLTFKFYMPKKATELKHLQCLENELGALQR"
-    }
-    for name, seq in samples.items():
-        st.markdown(f"**{name}**")
-        st.code(seq, language="text")
-        if st.button(f"Use {name}", key=name):
-            st.experimental_set_query_params(dummy=name)
-            # prefill by writing to the clipboard area (Streamlit doesn't support direct paste)
-    st.markdown("### Download model & code")
-    st.write("Model saved in `models/xgb2_solubility.joblib` and feature columns in `models/feature_cols.json`.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# -----------------------------
-# Footer
-# -----------------------------
-st.markdown('<div class="footer">Built with ❤️ — UESolDS · XGBoost · Streamlit</div>', unsafe_allow_html=True)
+st.markdown("---")
+st.markdown("#### Notes / Caveats")
+st.write("""
+- This model predicts solubility *as observed in E. coli expression experiments* used to build UESolDS.
+- Predictions are probabilistic and should be used as guidance, not definitive truth.
+""")
